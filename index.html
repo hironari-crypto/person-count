@@ -181,7 +181,7 @@
         const currentPersons = [];
 
         predictions.forEach(pred => {
-          if (pred.class === 'person' && pred.score > 0.5) {
+          if (pred.class === 'person' && pred.score > 0.3) {
             const [x, y, width, height] = pred.bbox;
             const centerX = x + width / 2;
             const centerY = y + height / 2;
@@ -199,7 +199,7 @@
         const newTracked = new Map();
         currentPersons.forEach(person => {
           let matchedId = null;
-          let minDistance = 80; // ピクセル単位のしきい値
+          let minDistance = 150; // ピクセル単位のしきい値
 
           for (let [id, prevPerson] of trackedPersons.entries()) {
             const dist = Math.hypot(person.centerX - prevPerson.centerX, person.centerY - prevPerson.centerY);
