@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>人流リアルタイム計測</title>
-  <!-- TensorFlow.js と COCO-SSD モデルの読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <style>
@@ -110,11 +109,10 @@
     const errorDiv = document.getElementById('error-message');
 
     let model = null;
-    let countLR = 0; // 左→右
-    let countRL = 0; // 右→左
+    let countLR = 0;
+    let countRL = 0;
     let trackedPersons = new Map();
     let nextPersonId = 1;
-    let frameCount = 0; // フレームスキップ用カウンター
 
     function showError(msg) {
       statusDiv.style.display = 'none';
@@ -122,14 +120,13 @@
       errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
     }
 
-    // カメラのセットアップ（解像度ダウン＆背面カメラ優先）
     async function setupCamera() {
       statusDiv.textContent = 'カメラの起動を許可してください...';
       
       const constraints = {
         video: {
-          facingMode: { ideal: "environment" }, // 背面カメラ
-          width: { ideal: 320 },               // 320x240で超高速化
+          facingMode: { ideal: "environment" },
+          width: { ideal: 320 },
           height: { ideal: 240 }
         },
         audio: false
@@ -146,44 +143,27 @@
           };
         });
       } catch (err) {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          showError('カメラへのアクセスが拒否されました。<br>ブラウザまたは端末の設定でカメラの使用を許可して再読み込みしてください。');
-        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-          showError('利用可能なカメラが見つかりませんでした。');
-        } else {
-          showError(`カメラの起動に失敗しました (${err.name}: ${err.message})`);
-        }
+        showError(`カメラの起動に失敗しました: ${err.message}`);
         throw err;
       }
     }
 
-    // メイン処理
     async function main() {
       try {
         await setupCamera();
-        
-        statusDiv.textContent = '軽量AIモデル (lite_mobilenet_v2) を読み込み中...';
-        // 超軽量モデルを指定
+        statusDiv.textContent = '高精度化モデルをセットアップ中...';
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        
-        statusDiv.textContent = '高速計測中...';
+        statusDiv.textContent = '高精度計測中...';
         detectFrame();
       } catch (err) {
         console.error(err);
-        if (errorDiv.style.display !== 'block') {
-          showError(`初期化エラー: ${err.message}`);
-        }
       }
     }
 
-    // フレーム検出＆追跡メインループ
     async function detectFrame() {
-      frameCount++;
-
-      // 2フレームに1回だけAI推論を実行（スマホの処理負荷を半減）
-      if (video.readyState === 4 && frameCount % 2 === 0) {
-        // 最大5件まで検出・しきい値0.3で拾いやすくする
-        const predictions = await model.detect(video, 5, 0.3);
+      if (video.readyState === 4) {
+        // 毎フレーム推論（スキップなし）＆ 検出確信度0.35
+        const predictions = await model.detect(video, 6, 0.35);
         
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
@@ -204,7 +184,7 @@
             const centerX = x + width / 2;
             const centerY = y + height / 2;
 
-            // 検出枠描画（緑枠）
+            // 緑色の検出ボックスを描画
             ctx.strokeStyle = '#00FF00';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
@@ -213,11 +193,11 @@
           }
         });
 
-        // 重複防止と通過判定（簡易トラッキング）
+        // 追跡とカウント処理
         const newTracked = new Map();
         currentPersons.forEach(person => {
           let matchedId = null;
-          let minDistance = 120; // 追跡時の許容移動距離（ピクセル）
+          let minDistance = 220; // 追跡範囲を220pxまで大幅拡張
 
           for (let [id, prevPerson] of trackedPersons.entries()) {
             const dist = Math.hypot(person.centerX - prevPerson.centerX, person.centerY - prevPerson.centerY);
@@ -233,7 +213,7 @@
 
           const prevPerson = trackedPersons.get(matchedId);
           if (prevPerson) {
-            // 左 → 右 通過判定
+            // 左 → 右 通過判定（判定幅を拡張）
             if (prevPerson.centerX < lineX && person.centerX >= lineX) {
               countLR++;
               document.getElementById('count-lr').textContent = countLR;
