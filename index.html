@@ -3,159 +3,235 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>人流計測（左右カウント）サンプル</title>
+  <title>人流リアルタイム計測</title>
   <!-- TensorFlow.js と COCO-SSD モデルの読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <style>
-    body { font-family: sans-serif; text-align: center; margin: 0; padding: 20px; background: #f0f2f5; }
-    .container { position: relative; display: inline-block; }
-    video, canvas { border-radius: 8px; width: 100%; max-width: 640px; height: auto; }
-    canvas { position: absolute; top: 0; left: 0; }
-    .counter-board {
-      display: flex; justify-content: center; gap: 20px; margin-top: 15px;
-      font-size: 1.2rem; font-weight: bold;
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 10px;
+      text-align: center;
+      background-color: #f8f9fa;
     }
-    .count-box { background: #fff; padding: 10px 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h1 {
+      font-size: 1.2rem;
+      margin-bottom: 10px;
+    }
+    #status {
+      font-weight: bold;
+      color: #007bff;
+      margin-bottom: 10px;
+      padding: 8px;
+      background: #e9ecef;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    #error-message {
+      color: #dc3545;
+      background-color: #f8d7da;
+      border: 1px solid #f5c6cb;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+      display: none;
+      font-size: 0.85rem;
+      text-align: left;
+    }
+    .video-container {
+      position: relative;
+      display: inline-block;
+      width: 100%;
+      max-width: 640px;
+    }
+    video, canvas {
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    .counter-box {
+      margin-top: 10px;
+      display: flex;
+      justify-content: center;
+      gap: 15px;
+    }
+    .count-item {
+      background: white;
+      padding: 10px 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      font-size: 1.1rem;
+      font-weight: bold;
+    }
+    .left-to-right { color: #28a745; }
+    .right-to-left { color: #007bff; }
   </style>
 </head>
 <body>
 
-  <h2>人流リアルタイム計測（TensorFlow.js）</h2>
+  <h1>人流リアルタイム計測（TensorFlow.js）</h1>
   
-  <div class="container">
-    <video id="video" autoplay playsinline muted></video>
-    <canvas id="canvas"></canvas>
+  <div id="status">システムを初期化中...</div>
+  <div id="error-message"></div>
+
+  <div class="video-container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="output"></canvas>
   </div>
 
-  <div class="counter-board">
-    <div class="count-box" style="color: #007bff;">右 → 左: <span id="count-r2l">0</span> 人</div>
-    <div class="count-box" style="color: #28a745;">左 → 右: <span id="count-l2r">0</span> 人</div>
+  <div class="counter-box">
+    <div class="count-item right-to-left">右 → 左: <span id="count-rl">0</span> 人</div>
+    <div class="count-item left-to-right">左 → 右: <span id="count-lr">0</span> 人</div>
   </div>
 
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output');
     const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const errorDiv = document.getElementById('error-message');
 
-    let countR2L = 0;
-    let countL2R = 0;
-    
-    // 直前フレームの検出人物の重心位置を保持（簡略化したID不要の追跡）
-    let previousCenters = [];
+    let model = null;
+    let countLR = 0; // 左→右
+    let countRL = 0; // 右→左
+    let trackedPersons = new Map();
+    let nextPersonId = 1;
 
-    // カメラのセットアップ
+    function showError(msg) {
+      statusDiv.style.display = 'none';
+      errorDiv.style.display = 'block';
+      errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
+    }
+
+    // カメラのセットアップ（背面カメラを優先）
     async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        // video: { facingMode: 'environment', width: 640, height: 480 },
-        video: { facingMode: { exact: "environment" }, width: 640, height: 480 }
-        audio: false
-      });
-      video.srcObject = stream;
-      return new Promise((resolve) => {
-        video.onloadedmetadata = () => {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          resolve();
-        };
-      });
-    }
-
-    // メインループ
-    async function main() {
-      await setupCamera();
-      // COCO-SSDモデルのロード
-      const model = await cocoSsd.load();
-      detectFrame(model);
-    }
-
-    async function detectFrame(model) {
-      // 映像から物体検出
-      const predictions = await model.detect(video);
+      statusDiv.textContent = 'カメラの起動を許可してください...';
       
-      // 描画のクリア
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // 1. 中央の判定ラインを描画
-      const lineX = canvas.width / 2;
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(lineX, 0);
-      ctx.lineTo(lineX, canvas.height);
-      ctx.stroke();
-
-      // 今回のフレームで検出された「人」の重心リスト
-      const currentCenters = [];
-
-      predictions.forEach(pred => {
-        // 「person（人）」かつ信頼度が高めのものだけ処理
-        if (pred.class === 'person' && pred.score > 0.5) {
-          const [x, y, width, height] = pred.bbox;
-          const centerX = x + width / 2;
-          const centerY = y + height / 2;
-
-          currentCenters.push({ x: centerX, y: centerY });
-
-          // 検出枠の描画
-          ctx.strokeStyle = '#00FF00';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(x, y, width, height);
-
-          // 重心の描画
-          ctx.fillStyle = 'yellow';
-          ctx.beginPath();
-          ctx.arc(centerX, centerY, 5, 0, 2 * Math.PI);
-          ctx.fill();
-
-          // 前フレームの人物位置と比較してライン通過判定
-          previousCenters.forEach(prev => {
-            // 同一人物とみなす距離の閾値（フレーム間の移動距離）
-            const distance = Math.hypot(centerX - prev.x, centerY - prev.y);
-            if (distance < 80) { // 80px以内の移動を同一人物と推定
-              
-              // 右から左へラインを跨いだ場合
-              if (prev.x > lineX && centerX <= lineX) {
-                countR2L++;
-                document.getElementById('count-r2l').innerText = countR2L;
-                sendToCloudRun('RightToLeft');
-              }
-              // 左から右へラインを跨いだ場合
-              else if (prev.x < lineX && centerX >= lineX) {
-                countL2R++;
-                document.getElementById('count-l2r').innerText = countL2R;
-                sendToCloudRun('LeftToRight');
-              }
-            }
-          });
-        }
-      });
-
-      // 次のフレーム用に現在位置を更新
-      previousCenters = currentCenters;
-
-      // 次のフレームの処理を呼び出し
-      requestAnimationFrame(() => detectFrame(model));
-    }
-
-    // Cloud Run側（API）にデータを送信する関数
-    async function sendToCloudRun(direction) {
-      const endpoint = "https://your-cloud-run-url.a.run.app/api/count"; // Cloud RunのURLを指定
-      const payload = {
-        timestamp: new Date().toISOString(),
-        direction: direction
+      const constraints = {
+        video: {
+          facingMode: { ideal: "environment" }, // 背面カメラを優先
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: false
       };
 
       try {
-        await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        return new Promise((resolve) => {
+          video.onloadedmetadata = () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            resolve(video);
+          };
         });
-        console.log("Cloud Runへ送信完了:", payload);
       } catch (err) {
-        console.error("送信エラー:", err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          showError('カメラのアクセスが拒否されました。<br>ブラウザまたは端末の設定でカメラを許可して再読み込みしてください。');
+        } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+          showError('利用可能なカメラが見つかりませんでした。');
+        } else {
+          showError(`カメラの起動に失敗しました (${err.name}: ${err.message})`);
+        }
+        throw err;
       }
+    }
+
+    // メイン処理
+    async function main() {
+      try {
+        await setupCamera();
+        
+        statusDiv.textContent = 'AIモデル (COCO-SSD) を読み込み中...';
+        model = await cocoSsd.load();
+        
+        statusDiv.textContent = '計測中...';
+        detectFrame();
+      } catch (err) {
+        console.error(err);
+        if (errorDiv.style.display !== 'block') {
+          showError(`初期化エラー: ${err.message}`);
+        }
+      }
+    }
+
+    // フレームごとの検出とトラッキング
+    async function detectFrame() {
+      if (video.readyState === 4) {
+        const predictions = await model.detect(video);
+        
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 判定ライン（中央に垂直線）
+        const lineX = canvas.width / 2;
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(lineX, 0);
+        ctx.lineTo(lineX, canvas.height);
+        ctx.stroke();
+
+        const currentPersons = [];
+
+        predictions.forEach(pred => {
+          if (pred.class === 'person' && pred.score > 0.5) {
+            const [x, y, width, height] = pred.bbox;
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
+
+            // バウンディングボックス描画
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, width, height);
+
+            currentPersons.push({ centerX, centerY, bbox: [x, y, width, height] });
+          }
+        });
+
+        // 簡易トラッキング処理
+        const newTracked = new Map();
+        currentPersons.forEach(person => {
+          let matchedId = null;
+          let minDistance = 80; // ピクセル単位のしきい値
+
+          for (let [id, prevPerson] of trackedPersons.entries()) {
+            const dist = Math.hypot(person.centerX - prevPerson.centerX, person.centerY - prevPerson.centerY);
+            if (dist < minDistance) {
+              minDistance = dist;
+              matchedId = id;
+            }
+          }
+
+          if (matchedId === null) {
+            matchedId = nextPersonId++;
+          }
+
+          const prevPerson = trackedPersons.get(matchedId);
+          if (prevPerson) {
+            // カウント判定（ラインをまたいだか）
+            if (prevPerson.centerX < lineX && person.centerX >= lineX) {
+              countLR++;
+              document.getElementById('count-lr').textContent = countLR;
+            } else if (prevPerson.centerX > lineX && person.centerX <= lineX) {
+              countRL++;
+              document.getElementById('count-rl').textContent = countRL;
+            }
+          }
+
+          newTracked.set(matchedId, person);
+        });
+
+        trackedPersons = newTracked;
+      }
+
+      requestAnimationFrame(detectFrame);
     }
 
     window.onload = main;
