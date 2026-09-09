@@ -9,31 +9,33 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <style>
     body {
-      font-family: sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       margin: 0;
-      padding: 10px;
+      padding: 12px;
       text-align: center;
       background-color: #f8f9fa;
+      color: #333;
     }
     h1 {
       font-size: 1.2rem;
+      margin-top: 5px;
       margin-bottom: 10px;
     }
     #status {
       font-weight: bold;
       color: #007bff;
       margin-bottom: 10px;
-      padding: 8px;
+      padding: 8px 12px;
       background: #e9ecef;
-      border-radius: 4px;
-      font-size: 0.9rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
     }
     #error-message {
-      color: #dc3545;
+      color: #721c24;
       background-color: #f8d7da;
       border: 1px solid #f5c6cb;
-      padding: 10px;
-      border-radius: 4px;
+      padding: 10px 14px;
+      border-radius: 6px;
       margin-bottom: 10px;
       display: none;
       font-size: 0.85rem;
@@ -43,12 +45,16 @@
       position: relative;
       display: inline-block;
       width: 100%;
-      max-width: 640px;
+      max-width: 480px;
+      background-color: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     video, canvas {
+      display: block;
       width: 100%;
       height: auto;
-      border-radius: 8px;
     }
     canvas {
       position: absolute;
@@ -56,21 +62,27 @@
       left: 0;
     }
     .counter-box {
-      margin-top: 10px;
+      margin-top: 12px;
       display: flex;
       justify-content: center;
-      gap: 15px;
+      gap: 12px;
     }
     .count-item {
+      flex: 1;
+      max-width: 220px;
       background: white;
-      padding: 10px 15px;
+      padding: 10px 12px;
       border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-      font-size: 1.1rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+      font-size: 1rem;
       font-weight: bold;
     }
     .left-to-right { color: #28a745; }
     .right-to-left { color: #007bff; }
+    .count-num {
+      font-size: 1.4rem;
+      margin-left: 4px;
+    }
   </style>
 </head>
 <body>
@@ -86,8 +98,8 @@
   </div>
 
   <div class="counter-box">
-    <div class="count-item right-to-left">右 → 左: <span id="count-rl">0</span> 人</div>
-    <div class="count-item left-to-right">左 → 右: <span id="count-lr">0</span> 人</div>
+    <div class="count-item right-to-left">右 → 左: <span id="count-rl" class="count-num">0</span> 人</div>
+    <div class="count-item left-to-right">左 → 右: <span id="count-lr" class="count-num">0</span> 人</div>
   </div>
 
   <script>
@@ -102,6 +114,7 @@
     let countRL = 0; // 右→左
     let trackedPersons = new Map();
     let nextPersonId = 1;
+    let frameCount = 0; // フレームスキップ用カウンター
 
     function showError(msg) {
       statusDiv.style.display = 'none';
@@ -109,15 +122,15 @@
       errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
     }
 
-    // カメラのセットアップ（背面カメラを優先）
+    // カメラのセットアップ（解像度ダウン＆背面カメラ優先）
     async function setupCamera() {
       statusDiv.textContent = 'カメラの起動を許可してください...';
       
       const constraints = {
         video: {
-          facingMode: { ideal: "environment" }, // 背面カメラを優先
-          width: { ideal: 640 },
-          height: { ideal: 480 }
+          facingMode: { ideal: "environment" }, // 背面カメラ
+          width: { ideal: 320 },               // 320x240で超高速化
+          height: { ideal: 240 }
         },
         audio: false
       };
@@ -134,7 +147,7 @@
         });
       } catch (err) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          showError('カメラのアクセスが拒否されました。<br>ブラウザまたは端末の設定でカメラを許可して再読み込みしてください。');
+          showError('カメラへのアクセスが拒否されました。<br>ブラウザまたは端末の設定でカメラの使用を許可して再読み込みしてください。');
         } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
           showError('利用可能なカメラが見つかりませんでした。');
         } else {
@@ -149,10 +162,11 @@
       try {
         await setupCamera();
         
-        statusDiv.textContent = 'AIモデル (COCO-SSD) を読み込み中...';
-        model = await cocoSsd.load();
+        statusDiv.textContent = '軽量AIモデル (lite_mobilenet_v2) を読み込み中...';
+        // 超軽量モデルを指定
+        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         
-        statusDiv.textContent = '計測中...';
+        statusDiv.textContent = '高速計測中...';
         detectFrame();
       } catch (err) {
         console.error(err);
@@ -162,14 +176,18 @@
       }
     }
 
-    // フレームごとの検出とトラッキング
+    // フレーム検出＆追跡メインループ
     async function detectFrame() {
-      if (video.readyState === 4) {
-        const predictions = await model.detect(video);
+      frameCount++;
+
+      // 2フレームに1回だけAI推論を実行（スマホの処理負荷を半減）
+      if (video.readyState === 4 && frameCount % 2 === 0) {
+        // 最大5件まで検出・しきい値0.3で拾いやすくする
+        const predictions = await model.detect(video, 5, 0.3);
         
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // 判定ライン（中央に垂直線）
+        // 中央判定ライン（赤線）
         const lineX = canvas.width / 2;
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 3;
@@ -181,25 +199,25 @@
         const currentPersons = [];
 
         predictions.forEach(pred => {
-          if (pred.class === 'person' && pred.score > 0.3) {
+          if (pred.class === 'person') {
             const [x, y, width, height] = pred.bbox;
             const centerX = x + width / 2;
             const centerY = y + height / 2;
 
-            // バウンディングボックス描画
+            // 検出枠描画（緑枠）
             ctx.strokeStyle = '#00FF00';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
 
-            currentPersons.push({ centerX, centerY, bbox: [x, y, width, height] });
+            currentPersons.push({ centerX, centerY });
           }
         });
 
-        // 簡易トラッキング処理
+        // 重複防止と通過判定（簡易トラッキング）
         const newTracked = new Map();
         currentPersons.forEach(person => {
           let matchedId = null;
-          let minDistance = 150; // ピクセル単位のしきい値
+          let minDistance = 120; // 追跡時の許容移動距離（ピクセル）
 
           for (let [id, prevPerson] of trackedPersons.entries()) {
             const dist = Math.hypot(person.centerX - prevPerson.centerX, person.centerY - prevPerson.centerY);
@@ -215,11 +233,13 @@
 
           const prevPerson = trackedPersons.get(matchedId);
           if (prevPerson) {
-            // カウント判定（ラインをまたいだか）
+            // 左 → 右 通過判定
             if (prevPerson.centerX < lineX && person.centerX >= lineX) {
               countLR++;
               document.getElementById('count-lr').textContent = countLR;
-            } else if (prevPerson.centerX > lineX && person.centerX <= lineX) {
+            } 
+            // 右 → 左 通過判定
+            else if (prevPerson.centerX > lineX && person.centerX <= lineX) {
               countRL++;
               document.getElementById('count-rl').textContent = countRL;
             }
