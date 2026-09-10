@@ -111,6 +111,8 @@
     let model = null;
     let countLR = 0;
     let countRL = 0;
+    
+    // トラッキング用マップ (ID => { centerX, centerY, lostCount, hasCounted })
     let trackedPersons = new Map();
     let nextPersonId = 1;
 
@@ -151,7 +153,7 @@
     async function main() {
       try {
         await setupCamera();
-        statusDiv.textContent = '高精度化モデルをセットアップ中...';
+        statusDiv.textContent = 'モデルを読み込み中...';
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         statusDiv.textContent = '高精度計測中...';
         detectFrame();
@@ -162,8 +164,8 @@
 
     async function detectFrame() {
       if (video.readyState === 4) {
-        // 毎フレーム推論（スキップなし）＆ 検出確信度0.35
-        const predictions = await model.detect(video, 6, 0.35);
+        // 確信度0.4でノイズ（誤検知）を排除
+        const predictions = await model.detect(video, 6, 0.4);
         
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
@@ -176,7 +178,7 @@
         ctx.lineTo(lineX, canvas.height);
         ctx.stroke();
 
-        const currentPersons = [];
+        const currentDetections = [];
 
         predictions.forEach(pred => {
           if (pred.class === 'person') {
@@ -184,51 +186,72 @@
             const centerX = x + width / 2;
             const centerY = y + height / 2;
 
-            // 緑色の検出ボックスを描画
             ctx.strokeStyle = '#00FF00';
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
 
-            currentPersons.push({ centerX, centerY });
+            currentDetections.push({ centerX, centerY });
           }
         });
 
-        // 追跡とカウント処理
-        const newTracked = new Map();
-        currentPersons.forEach(person => {
-          let matchedId = null;
-          let minDistance = 220; // 追跡範囲を220pxまで大幅拡張
+        // 1. 既存の追跡対象の lostCount をインクリメント（見失いフラグ準備）
+        for (let [id, person] of trackedPersons.entries()) {
+          person.lostCount = (person.lostCount || 0) + 1;
+        }
 
-          for (let [id, prevPerson] of trackedPersons.entries()) {
-            const dist = Math.hypot(person.centerX - prevPerson.centerX, person.centerY - prevPerson.centerY);
+        // 2. 検出結果と既存追跡データのマッチング
+        currentDetections.forEach(det => {
+          let matchedId = null;
+          let minDistance = 150; // マッチング距離上限
+
+          for (let [id, person] of trackedPersons.entries()) {
+            const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
             if (dist < minDistance) {
               minDistance = dist;
               matchedId = id;
             }
           }
 
-          if (matchedId === null) {
-            matchedId = nextPersonId++;
-          }
-
-          const prevPerson = trackedPersons.get(matchedId);
-          if (prevPerson) {
-            // 左 → 右 通過判定（判定幅を拡張）
-            if (prevPerson.centerX < lineX && person.centerX >= lineX) {
-              countLR++;
-              document.getElementById('count-lr').textContent = countLR;
-            } 
-            // 右 → 左 通過判定
-            else if (prevPerson.centerX > lineX && person.centerX <= lineX) {
-              countRL++;
-              document.getElementById('count-rl').textContent = countRL;
+          if (matchedId !== null) {
+            // 既存人物の座標を更新してロストカウントをリセット
+            const prevPerson = trackedPersons.get(matchedId);
+            
+            // --- 通過判定（厳格化） ---
+            if (!prevPerson.hasCounted) {
+              // 左 → 右 （明確にラインをまたいだか）
+              if (prevPerson.centerX < lineX - 5 && det.centerX >= lineX + 5) {
+                countLR++;
+                document.getElementById('count-lr').textContent = countLR;
+                prevPerson.hasCounted = true;
+              } 
+              // 右 → 左
+              else if (prevPerson.centerX > lineX + 5 && det.centerX <= lineX - 5) {
+                countRL++;
+                document.getElementById('count-rl').textContent = countRL;
+                prevPerson.hasCounted = true;
+              }
             }
-          }
 
-          newTracked.set(matchedId, person);
+            prevPerson.centerX = det.centerX;
+            prevPerson.centerY = det.centerY;
+            prevPerson.lostCount = 0; // 見つけたらリセット
+          } else {
+            // 新しい人物として登録
+            trackedPersons.set(nextPersonId++, {
+              centerX: det.centerX,
+              centerY: det.centerY,
+              lostCount: 0,
+              hasCounted: false
+            });
+          }
         });
 
-        trackedPersons = newTracked;
+        // 3. 一定フレーム（10フレーム＝約0.3秒）以上見失った人物だけ削除
+        for (let [id, person] of trackedPersons.entries()) {
+          if (person.lostCount > 10) {
+            trackedPersons.delete(id);
+          }
+        }
       }
 
       requestAnimationFrame(detectFrame);
