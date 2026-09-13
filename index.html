@@ -112,8 +112,9 @@
     let countLR = 0;
     let countRL = 0;
     let wakeLock = null;
-    let isProcessing = false;
+    let isDetecting = false;
     
+    let currentDetections = [];
     let trackedPersons = new Map();
     let nextPersonId = 1;
 
@@ -136,11 +137,13 @@
     async function setupCamera() {
       statusDiv.textContent = 'カメラの起動を許可してください...';
       
+      // 高速化のため解像度を 320x240 に指定
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
           width: { ideal: 320 },
-          height: { ideal: 240 }
+          height: { ideal: 240 },
+          frameRate: { ideal: 30 }
         },
         audio: false
       };
@@ -166,58 +169,51 @@
       try {
         await setupCamera();
         await requestWakeLock();
-        statusDiv.textContent = 'モデルを読み込み中...';
+        statusDiv.textContent = '軽量モデルを読み込み中...';
         
-        // TensorFlow.js のバックエンド初期化
         await tf.ready();
+        // モバイルに最適化された最も軽い設定でロード
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         
         statusDiv.textContent = '計測中...';
-        detectLoop();
+        
+        // 描画ループとAI検出ループを独立して開始
+        renderLoop();
+        runDetection();
       } catch (err) {
         showError(`初期化エラー: ${err.message}`);
         console.error(err);
       }
     }
 
-    async function detectLoop() {
-      if (video.readyState === 4 && !isProcessing) {
-        isProcessing = true;
+    // AI検出ループ（可能な限りの最速スピードで回す）
+    async function runDetection() {
+      if (video.readyState === 4 && model && !isDetecting) {
+        isDetecting = true;
         try {
-          // AI物体認識の実行
-          const predictions = await model.detect(video, 6, 0.3);
+          // 信頼度閾値を 0.25 に設定して素早く感知
+          const predictions = await model.detect(video, 5, 0.25);
           
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          
-          // 中央の赤線の描画
           const lineX = canvas.width / 2;
-          ctx.strokeStyle = 'red';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.moveTo(lineX, 0);
-          ctx.lineTo(lineX, canvas.height);
-          ctx.stroke();
-
-          const currentDetections = [];
+          const newDetections = [];
 
           predictions.forEach(pred => {
             if (pred.class === 'person') {
               const [x, y, width, height] = pred.bbox;
               const centerX = x + width / 2;
               const centerY = y + height / 2;
-
-              currentDetections.push({ x, y, width, height, centerX, centerY });
+              newDetections.push({ x, y, width, height, centerX, centerY });
             }
           });
 
-          // ロストカウントの増加
+          // ロストカウント加算
           for (let [id, person] of trackedPersons.entries()) {
             person.lostCount = (person.lostCount || 0) + 1;
           }
 
-          currentDetections.forEach(det => {
+          newDetections.forEach(det => {
             let matchedId = null;
-            let minDistance = 60;
+            let minDistance = 80; // 追跡範囲を少し広げて補正力を強化
 
             for (let [id, person] of trackedPersons.entries()) {
               if (person.updatedInCurrentFrame) continue;
@@ -232,17 +228,25 @@
             const isCurrentLeft = det.centerX < lineX;
             const isCurrentRight = det.centerX >= lineX;
             let person = null;
-            let currentId = matchedId;
 
             if (matchedId !== null) {
               person = trackedPersons.get(matchedId);
+              person.x = det.x;
+              person.y = det.y;
+              person.width = det.width;
+              person.height = det.height;
               person.centerX = det.centerX;
               person.centerY = det.centerY;
               person.lostCount = 0;
               person.updatedInCurrentFrame = true;
             } else {
-              currentId = nextPersonId++;
+              const currentId = nextPersonId++;
               person = {
+                id: currentId,
+                x: det.x,
+                y: det.y,
+                width: det.width,
+                height: det.height,
                 centerX: det.centerX,
                 centerY: det.centerY,
                 lostCount: 0,
@@ -257,7 +261,7 @@
             if (isCurrentLeft) person.visitedLeft = true;
             if (isCurrentRight) person.visitedRight = true;
 
-            // カウント判定（エリア進入）
+            // カウント判定
             if (!person.hasCounted) {
               if (person.visitedLeft && isCurrentRight) {
                 countLR++;
@@ -269,38 +273,59 @@
                 person.hasCounted = true;
               }
             }
-
-            // 枠線描画
-            ctx.strokeStyle = person.hasCounted ? '#FFD700' : '#00FF00';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(det.x, det.y, det.width, det.height);
-
-            // ステータス表示
-            ctx.fillStyle = person.hasCounted ? '#FFD700' : '#00FF00';
-            ctx.font = 'bold 14px sans-serif';
-            let statusText = `ID:${currentId} `;
-            if (person.visitedLeft) statusText += '[L]';
-            if (person.visitedRight) statusText += '[R]';
-            if (person.hasCounted) statusText += ' OK!';
-            ctx.fillText(statusText, det.x, det.y > 20 ? det.y - 5 : det.y + 15);
           });
 
-          // フレームごとのフラグ更新と消去
+          // クリーンアップ
           for (let [id, person] of trackedPersons.entries()) {
             person.updatedInCurrentFrame = false;
-            if (person.lostCount > 8) {
+            if (person.lostCount > 10) {
               trackedPersons.delete(id);
             }
           }
+
         } catch (err) {
           console.error(err);
         } finally {
-          isProcessing = false;
+          isDetecting = false;
+        }
+      }
+      
+      // 短いディレイでバックグラウンド実行を継続
+      setTimeout(runDetection, 30);
+    }
+
+    // 画面描画ループ（常に最高フレームレートで滑らかに表示）
+    function renderLoop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 中央の赤線
+      const lineX = canvas.width / 2;
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(lineX, 0);
+      ctx.lineTo(lineX, canvas.height);
+      ctx.stroke();
+
+      // 追跡中の人物枠を描画
+      for (let [id, person] of trackedPersons.entries()) {
+        // 見失って間もないものは表示を少し維持（チラつき防止）
+        if (person.lostCount < 5) {
+          ctx.strokeStyle = person.hasCounted ? '#FFD700' : '#00FF00';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(person.x, person.y, person.width, person.height);
+
+          ctx.fillStyle = person.hasCounted ? '#FFD700' : '#00FF00';
+          ctx.font = 'bold 14px sans-serif';
+          let statusText = `ID:${person.id} `;
+          if (person.visitedLeft) statusText += '[L]';
+          if (person.visitedRight) statusText += '[R]';
+          if (person.hasCounted) statusText += ' OK!';
+          ctx.fillText(statusText, person.x, person.y > 20 ? person.y - 5 : person.y + 15);
         }
       }
 
-      // 次のフレーム呼び出し
-      requestAnimationFrame(detectLoop);
+      requestAnimationFrame(renderLoop);
     }
 
     document.addEventListener('visibilitychange', async () => {
