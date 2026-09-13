@@ -114,7 +114,6 @@
     let wakeLock = null;
     let isDetecting = false;
     
-    let currentDetections = [];
     let trackedPersons = new Map();
     let nextPersonId = 1;
 
@@ -137,7 +136,6 @@
     async function setupCamera() {
       statusDiv.textContent = 'カメラの起動を許可してください...';
       
-      // 高速化のため解像度を 320x240 に指定
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
@@ -172,12 +170,10 @@
         statusDiv.textContent = '軽量モデルを読み込み中...';
         
         await tf.ready();
-        // モバイルに最適化された最も軽い設定でロード
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         
         statusDiv.textContent = '計測中...';
         
-        // 描画ループとAI検出ループを独立して開始
         renderLoop();
         runDetection();
       } catch (err) {
@@ -186,13 +182,13 @@
       }
     }
 
-    // AI検出ループ（可能な限りの最速スピードで回す）
+    // AI検出処理
     async function runDetection() {
       if (video.readyState === 4 && model && !isDetecting) {
         isDetecting = true;
         try {
-          // 信頼度閾値を 0.25 に設定して素早く感知
-          const predictions = await model.detect(video, 5, 0.25);
+          // 誤認識（ノイズ）を防ぐため信頼度を 0.35 に調整
+          const predictions = await model.detect(video, 6, 0.35);
           
           const lineX = canvas.width / 2;
           const newDetections = [];
@@ -206,14 +202,16 @@
             }
           });
 
-          // ロストカウント加算
+          // 各追跡対象の更新フラグをリセットし、ロストカウントを加算
           for (let [id, person] of trackedPersons.entries()) {
+            person.updatedInCurrentFrame = false;
             person.lostCount = (person.lostCount || 0) + 1;
           }
 
+          // 検出された人物のマッチング処理
           newDetections.forEach(det => {
             let matchedId = null;
-            let minDistance = 80; // 追跡範囲を少し広げて補正力を強化
+            let minDistance = 70;
 
             for (let [id, person] of trackedPersons.entries()) {
               if (person.updatedInCurrentFrame) continue;
@@ -237,7 +235,7 @@
               person.height = det.height;
               person.centerX = det.centerX;
               person.centerY = det.centerY;
-              person.lostCount = 0;
+              person.lostCount = 0; // 見つかったのでリセット
               person.updatedInCurrentFrame = true;
             } else {
               const currentId = nextPersonId++;
@@ -275,10 +273,9 @@
             }
           });
 
-          // クリーンアップ
+          // 【重要な変更】画面から消えた枠を素早く除去（2回連続で見失ったら即削除）
           for (let [id, person] of trackedPersons.entries()) {
-            person.updatedInCurrentFrame = false;
-            if (person.lostCount > 10) {
+            if (person.lostCount >= 2) {
               trackedPersons.delete(id);
             }
           }
@@ -290,11 +287,10 @@
         }
       }
       
-      // 短いディレイでバックグラウンド実行を継続
       setTimeout(runDetection, 30);
     }
 
-    // 画面描画ループ（常に最高フレームレートで滑らかに表示）
+    // 画面描画処理
     function renderLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -307,10 +303,9 @@
       ctx.lineTo(lineX, canvas.height);
       ctx.stroke();
 
-      // 追跡中の人物枠を描画
+      // 追跡中の人物枠を描画（見失ったフレームではすぐ消去）
       for (let [id, person] of trackedPersons.entries()) {
-        // 見失って間もないものは表示を少し維持（チラつき防止）
-        if (person.lostCount < 5) {
+        if (person.lostCount === 0) {
           ctx.strokeStyle = person.hasCounted ? '#FFD700' : '#00FF00';
           ctx.lineWidth = 2;
           ctx.strokeRect(person.x, person.y, person.width, person.height);
