@@ -112,6 +112,7 @@
     let countLR = 0;
     let countRL = 0;
     let wakeLock = null;
+    let isProcessing = false;
     
     let trackedPersons = new Map();
     let nextPersonId = 1;
@@ -122,14 +123,13 @@
       errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
     }
 
-    // 画面スリープ防止処理（Wake Lock）
     async function requestWakeLock() {
       try {
         if ('wakeLock' in navigator) {
           wakeLock = await navigator.wakeLock.request('screen');
         }
       } catch (err) {
-        console.log(`Wake Lock error: ${err.name}, ${err.message}`);
+        console.log(`Wake Lock error: ${err.message}`);
       }
     }
 
@@ -167,17 +167,29 @@
         await setupCamera();
         await requestWakeLock();
         statusDiv.textContent = 'モデルを読み込み中...';
+        // 軽量化のため環境を設定
+        tf.env().set('WEBGL_DELETE_TEXTURE_THRESHOLD', 0);
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         statusDiv.textContent = '計測中...';
-        detectFrame();
+        
+        // メモリリーク防止のため setInterval で制御
+        setInterval(detectFrame, 100); 
       } catch (err) {
         console.error(err);
       }
     }
 
     async function detectFrame() {
-      if (video.readyState === 4) {
-        const predictions = await model.detect(video, 6, 0.3);
+      if (video.readyState !== 4 || isProcessing) return;
+      isProcessing = true;
+
+      try {
+        // tf.tidy() 内でテンソルを自動クリーンアップ
+        const predictions = await tf.tidy(() => {
+          return model.detect(video, 6, 0.3);
+        });
+
+        const predictionsData = await predictions;
         
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
@@ -191,7 +203,7 @@
 
         const currentDetections = [];
 
-        predictions.forEach(pred => {
+        predictionsData.forEach(pred => {
           if (pred.class === 'person') {
             const [x, y, width, height] = pred.bbox;
             const centerX = x + width / 2;
@@ -207,7 +219,7 @@
 
         currentDetections.forEach(det => {
           let matchedId = null;
-          let minDistance = 50;
+          let minDistance = 60; 
 
           for (let [id, person] of trackedPersons.entries()) {
             if (person.updatedInCurrentFrame) continue;
@@ -274,16 +286,17 @@
 
         for (let [id, person] of trackedPersons.entries()) {
           person.updatedInCurrentFrame = false;
-          if (person.lostCount > 6) {
+          if (person.lostCount > 8) {
             trackedPersons.delete(id);
           }
         }
+      } catch (err) {
+        console.error("Frame detection error:", err);
+      } finally {
+        isProcessing = false;
       }
-
-      requestAnimationFrame(detectFrame);
     }
 
-    // バックグラウンドから復帰した際に再度WakeLockを設定
     document.addEventListener('visibilitychange', async () => {
       if (wakeLock !== null && document.visibilityState === 'visible') {
         await requestWakeLock();
