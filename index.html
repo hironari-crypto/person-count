@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>人流リアルタイム計測</title>
+  <title>人流リアルタイム計測（デバッグモード）</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
   <style>
@@ -86,7 +86,7 @@
 </head>
 <body>
 
-  <h1>人流リアルタイム計測（TensorFlow.js）</h1>
+  <h1>人流リアルタイム計測（デバッグモード）</h1>
   
   <div id="status">システムを初期化中...</div>
   <div id="error-message"></div>
@@ -112,7 +112,6 @@
     let countLR = 0;
     let countRL = 0;
     
-    // トラッキング用マップ (ID => { centerX, centerY, lostCount, visitedLeft, visitedRight, hasCounted })
     let trackedPersons = new Map();
     let nextPersonId = 1;
 
@@ -155,7 +154,7 @@
         await setupCamera();
         statusDiv.textContent = 'モデルを読み込み中...';
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        statusDiv.textContent = '高精度計測中...';
+        statusDiv.textContent = 'デバッグ計測中...';
         detectFrame();
       } catch (err) {
         console.error(err);
@@ -164,11 +163,11 @@
 
     async function detectFrame() {
       if (video.readyState === 4) {
-        const predictions = await model.detect(video, 6, 0.3);
+        // 確信度を0.25にさらに緩和して認識率を優先
+        const predictions = await model.detect(video, 6, 0.25);
         
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // 画面を左右に分ける境界線
         const lineX = canvas.width / 2;
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 3;
@@ -185,11 +184,7 @@
             const centerX = x + width / 2;
             const centerY = y + height / 2;
 
-            ctx.strokeStyle = '#00FF00';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-
-            currentDetections.push({ centerX, centerY });
+            currentDetections.push({ x, y, width, height, centerX, centerY });
           }
         });
 
@@ -199,7 +194,7 @@
 
         currentDetections.forEach(det => {
           let matchedId = null;
-          let minDistance = 250; // 素早い移動（フレーム飛び）にも耐えられるよう追跡距離を拡張
+          let minDistance = 300; // 追跡範囲をさらに拡大
 
           for (let [id, person] of trackedPersons.entries()) {
             const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
@@ -209,27 +204,23 @@
             }
           }
 
-          // 現在の位置が「左エリア」か「右エリア」かを判定
           const isCurrentLeft = det.centerX < lineX;
           const isCurrentRight = det.centerX >= lineX;
+
+          let currentPersonId = matchedId;
 
           if (matchedId !== null) {
             const person = trackedPersons.get(matchedId);
 
-            // 滞在履歴を更新
             if (isCurrentLeft) person.visitedLeft = true;
             if (isCurrentRight) person.visitedRight = true;
 
-            // エリア進入判定によるカウント処理
             if (!person.hasCounted) {
-              // 過去に左エリアにいた履歴があり、現在右エリアに入った場合
               if (person.visitedLeft && isCurrentRight) {
                 countLR++;
                 document.getElementById('count-lr').textContent = countLR;
                 person.hasCounted = true;
-              } 
-              // 過去に右エリアにいた履歴があり、現在左エリアに入った場合
-              else if (person.visitedRight && isCurrentLeft) {
+              } else if (person.visitedRight && isCurrentLeft) {
                 countRL++;
                 document.getElementById('count-rl').textContent = countRL;
                 person.hasCounted = true;
@@ -240,7 +231,7 @@
             person.centerY = det.centerY;
             person.lostCount = 0;
           } else {
-            // 新規認識時の登録処理（初期の滞在エリアを記録）
+            currentPersonId = nextPersonId;
             trackedPersons.set(nextPersonId++, {
               centerX: det.centerX,
               centerY: det.centerY,
@@ -250,11 +241,25 @@
               hasCounted: false
             });
           }
+
+          // 描画処理（デバッグ情報のテキスト表示）
+          const p = trackedPersons.get(currentPersonId);
+          ctx.strokeStyle = p.hasCounted ? '#FFD700' : '#00FF00'; // カウント済みは黄色、未判定は緑
+          ctx.lineWidth = 2;
+          ctx.strokeRect(det.x, det.y, det.width, det.height);
+
+          // IDと状態をテキストで表示
+          ctx.fillStyle = '#00FF00';
+          ctx.font = '16px sans-serif';
+          let statusText = `ID:${currentPersonId} `;
+          if (p.visitedLeft) statusText += '[L]';
+          if (p.visitedRight) statusText += '[R]';
+          if (p.hasCounted) statusText += ' OK!';
+          ctx.fillText(statusText, det.x, det.y > 20 ? det.y - 5 : det.y + 15);
         });
 
-        // 見失ってからの保持期間を10フレームに設定（一時的な遮蔽や見失いに対応）
         for (let [id, person] of trackedPersons.entries()) {
-          if (person.lostCount > 10) {
+          if (person.lostCount > 15) {
             trackedPersons.delete(id);
           }
         }
