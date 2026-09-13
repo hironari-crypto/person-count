@@ -2,334 +2,2251 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>人流リアルタイム計測</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+  >
+
+  <title>人流リアルタイム計測 改良版</title>
+
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        sans-serif;
+
       margin: 0;
       padding: 12px;
+
       text-align: center;
-      background-color: #f8f9fa;
+
+      background: #f8f9fa;
       color: #333;
+
+      -webkit-user-select: none;
+      user-select: none;
     }
+
     h1 {
-      font-size: 1.2rem;
-      margin-top: 5px;
-      margin-bottom: 10px;
+      font-size: 1.15rem;
+      margin: 5px 0 10px;
     }
+
     #status {
       font-weight: bold;
       color: #007bff;
-      margin-bottom: 10px;
+
+      margin-bottom: 8px;
       padding: 8px 12px;
+
       background: #e9ecef;
       border-radius: 6px;
-      font-size: 0.85rem;
+
+      font-size: 0.82rem;
     }
+
     #error-message {
       color: #721c24;
-      background-color: #f8d7da;
+      background: #f8d7da;
+
       border: 1px solid #f5c6cb;
       padding: 10px 14px;
+
       border-radius: 6px;
       margin-bottom: 10px;
+
       display: none;
-      font-size: 0.85rem;
+
+      font-size: 0.82rem;
       text-align: left;
     }
+
     .video-container {
       position: relative;
+
       display: inline-block;
+
       width: 100%;
-      max-width: 480px;
-      background-color: #000;
+      max-width: 640px;
+
+      background: #000;
+
       border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+
+      line-height: 0;
     }
-    video, canvas {
+
+    video,
+    canvas {
       display: block;
+
       width: 100%;
       height: auto;
     }
+
     canvas {
       position: absolute;
+
       top: 0;
       left: 0;
+
+      pointer-events: none;
     }
+
     .counter-box {
       margin-top: 12px;
+
       display: flex;
       justify-content: center;
-      gap: 12px;
+
+      gap: 8px;
     }
+
     .count-item {
       flex: 1;
-      max-width: 220px;
-      background: white;
-      padding: 10px 12px;
+
+      background: #fff;
+
+      padding: 10px 8px;
+
       border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-      font-size: 1rem;
+
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+
+      font-size: 0.9rem;
       font-weight: bold;
     }
-    .left-to-right { color: #28a745; }
-    .right-to-left { color: #007bff; }
+
+    .left-to-right {
+      color: #198754;
+    }
+
+    .right-to-left {
+      color: #0d6efd;
+    }
+
     .count-num {
-      font-size: 1.4rem;
-      margin-left: 4px;
+      font-size: 1.45rem;
+      margin-left: 3px;
+    }
+
+    .info-box {
+      display: flex;
+
+      justify-content: center;
+
+      gap: 8px;
+
+      margin-top: 8px;
+    }
+
+    .info-item {
+      flex: 1;
+
+      max-width: 180px;
+
+      background: #fff;
+
+      border-radius: 6px;
+
+      padding: 6px;
+
+      font-size: 0.72rem;
+
+      color: #666;
+    }
+
+    .info-value {
+      font-size: 0.95rem;
+
+      font-weight: bold;
+
+      color: #333;
+    }
+
+    .button-box {
+      margin-top: 10px;
+
+      display: flex;
+
+      justify-content: center;
+
+      gap: 8px;
+    }
+
+    button {
+      border: none;
+
+      border-radius: 6px;
+
+      padding: 9px 16px;
+
+      font-size: 0.85rem;
+
+      font-weight: bold;
+
+      background: #343a40;
+
+      color: white;
+    }
+
+    button:active {
+      opacity: 0.7;
+    }
+
+    .hint {
+      margin-top: 8px;
+
+      font-size: 0.7rem;
+
+      color: #777;
+
+      line-height: 1.4;
     }
   </style>
 </head>
+
 <body>
 
   <h1>人流リアルタイム計測</h1>
-  
-  <div id="status">システムを初期化中...</div>
+
+  <div id="status">
+    システムを初期化中...
+  </div>
+
   <div id="error-message"></div>
 
   <div class="video-container">
-    <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
+    <video
+      id="webcam"
+      autoplay
+      playsinline
+      webkit-playsinline
+      muted
+    ></video>
+
     <canvas id="output"></canvas>
   </div>
 
   <div class="counter-box">
-    <div class="count-item right-to-left">右 → 左: <span id="count-rl" class="count-num">0</span> 人</div>
-    <div class="count-item left-to-right">左 → 右: <span id="count-lr" class="count-num">0</span> 人</div>
+
+    <div class="count-item right-to-left">
+      右 → 左
+      <span id="count-rl" class="count-num">0</span>
+      人
+    </div>
+
+    <div class="count-item left-to-right">
+      左 → 右
+      <span id="count-lr" class="count-num">0</span>
+      人
+    </div>
+
   </div>
 
+  <div class="info-box">
+
+    <div class="info-item">
+      現在追跡
+      <div id="tracking-count" class="info-value">0</div>
+    </div>
+
+    <div class="info-item">
+      FPS
+      <div id="fps" class="info-value">0</div>
+    </div>
+
+    <div class="info-item">
+      検出人数
+      <div id="detection-count" class="info-value">0</div>
+    </div>
+
+  </div>
+
+  <div class="button-box">
+
+    <button id="reset-button">
+      カウンターリセット
+    </button>
+
+  </div>
+
+  <div class="hint">
+    中央の赤線を横切った方向をカウントします。
+    <br>
+    中央付近の検出ブレを抑えるため、一定の幅を持った判定領域を使用しています。
+  </div>
+
+
   <script>
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('output');
-    const ctx = canvas.getContext('2d');
-    const statusDiv = document.getElementById('status');
-    const errorDiv = document.getElementById('error-message');
+
+    /*
+     * ============================================================
+     * 基本設定
+     * ============================================================
+     */
+
+    const CONFIG = {
+
+      /*
+       * カメラ解像度
+       *
+       * 320x240:
+       *   軽い
+       *   スマホ向き
+       *
+       * 640x480:
+       *   検出精度が上がる可能性がある
+       *   ただし処理負荷が増える
+       */
+      CAMERA_WIDTH: 320,
+      CAMERA_HEIGHT: 240,
+
+      /*
+       * COCO-SSDの最大検出人数
+       */
+      MAX_DETECTIONS: 10,
+
+      /*
+       * 人物として採用する最低信頼度
+       */
+      SCORE_THRESHOLD: 0.35,
+
+      /*
+       * AI検出の最短間隔(ms)
+       *
+       * 30msにすると理論上は約33fpsですが、
+       * 実際にはAI推論時間が加わります。
+       *
+       * スマホでは80ms程度から試すのがおすすめ。
+       */
+      DETECTION_INTERVAL: 80,
+
+      /*
+       * 中央線から左右に何pxまでを
+       * 「中立領域」とするか。
+       *
+       * この範囲では左右状態を変更しない。
+       *
+       * 例:
+       *
+       *       LEFT | 中立 | RIGHT
+       *            -20 +20
+       */
+      LINE_MARGIN: 20,
+
+      /*
+       * 人物追跡の最大許容距離。
+       *
+       * フレーム間で人物がこれ以上離れた場合、
+       * 同一人物とはみなさない。
+       *
+       * 実際には人物の速度から予測した位置も使用する。
+       */
+      MAX_MATCH_DISTANCE: 90,
+
+      /*
+       * 人物を見失っても追跡を維持する時間(ms)
+       *
+       * スマホでは検出漏れが発生することがあるため、
+       * すぐにIDを削除しない。
+       */
+      TRACK_TIMEOUT: 1500,
+
+      /*
+       * 新しい人物を正式な追跡対象とするまでに
+       * 必要な検出回数。
+       *
+       * 1回だけの誤検出をID化しないため。
+       */
+      MIN_CONFIRMATION: 2,
+
+      /*
+       * 追跡対象の移動平均係数。
+       *
+       * 小さい:
+       *   滑らか
+       *
+       * 大きい:
+       *   現在位置に敏感
+       */
+      POSITION_SMOOTHING: 0.65,
+
+      /*
+       * 同一IDが一度カウントされた後は
+       * 再度カウントしない。
+       */
+      COUNT_ONLY_ONCE: true
+
+    };
+
+
+    /*
+     * ============================================================
+     * DOM
+     * ============================================================
+     */
+
+    const video =
+      document.getElementById("webcam");
+
+    const canvas =
+      document.getElementById("output");
+
+    const ctx =
+      canvas.getContext("2d");
+
+    const statusDiv =
+      document.getElementById("status");
+
+    const errorDiv =
+      document.getElementById("error-message");
+
+    const countLRDiv =
+      document.getElementById("count-lr");
+
+    const countRLDiv =
+      document.getElementById("count-rl");
+
+    const trackingCountDiv =
+      document.getElementById("tracking-count");
+
+    const detectionCountDiv =
+      document.getElementById("detection-count");
+
+    const fpsDiv =
+      document.getElementById("fps");
+
+    const resetButton =
+      document.getElementById("reset-button");
+
+
+    /*
+     * ============================================================
+     * グローバル状態
+     * ============================================================
+     */
 
     let model = null;
+
     let countLR = 0;
     let countRL = 0;
+
     let wakeLock = null;
+
     let isDetecting = false;
-    
-    let trackedPersons = new Map();
+
     let nextPersonId = 1;
 
-    function showError(msg) {
-      statusDiv.style.display = 'none';
-      errorDiv.style.display = 'block';
-      errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
+    /*
+     * 現在追跡中の人物
+     *
+     * Map<id, track>
+     */
+    const trackedPersons = new Map();
+
+
+    /*
+     * FPS計測
+     */
+
+    let fpsFrameCount = 0;
+    let fpsLastTime = performance.now();
+
+
+    /*
+     * ============================================================
+     * エラー表示
+     * ============================================================
+     */
+
+    function showError(message) {
+
+      statusDiv.style.display = "none";
+
+      errorDiv.style.display = "block";
+
+      errorDiv.textContent =
+        "エラーが発生しました: " + message;
+
     }
+
+
+    /*
+     * ============================================================
+     * Wake Lock
+     * ============================================================
+     */
 
     async function requestWakeLock() {
+
       try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
+
+        if (!("wakeLock" in navigator)) {
+          return;
         }
+
+        wakeLock =
+          await navigator.wakeLock.request("screen");
+
       } catch (err) {
-        console.log(`Wake Lock error: ${err.message}`);
+
+        console.log(
+          "Wake Lock error:",
+          err.message
+        );
+
       }
+
     }
+
+
+    /*
+     * ============================================================
+     * カメラ
+     * ============================================================
+     */
 
     async function setupCamera() {
-      statusDiv.textContent = 'カメラの起動を許可してください...';
-      
+
+      statusDiv.textContent =
+        "カメラの起動を許可してください...";
+
+
+      if (
+        !navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia
+      ) {
+
+        throw new Error(
+          "このブラウザではカメラAPIを利用できません。"
+        );
+
+      }
+
+
       const constraints = {
+
         video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 320 },
-          height: { ideal: 240 },
-          frameRate: { ideal: 30 }
+
+          facingMode: {
+            ideal: "environment"
+          },
+
+          width: {
+            ideal: CONFIG.CAMERA_WIDTH
+          },
+
+          height: {
+            ideal: CONFIG.CAMERA_HEIGHT
+          },
+
+          frameRate: {
+            ideal: 30
+          }
+
         },
+
         audio: false
+
       };
 
+
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+        const stream =
+          await navigator.mediaDevices
+            .getUserMedia(constraints);
+
+
         video.srcObject = stream;
-        return new Promise((resolve) => {
+
+
+        return new Promise((resolve, reject) => {
+
           video.onloadedmetadata = () => {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            video.play();
-            resolve(video);
+
+            canvas.width =
+              video.videoWidth ||
+              CONFIG.CAMERA_WIDTH;
+
+            canvas.height =
+              video.videoHeight ||
+              CONFIG.CAMERA_HEIGHT;
+
+
+            video.play()
+              .then(() => resolve(video))
+              .catch(reject);
+
           };
+
         });
+
+
       } catch (err) {
-        showError(`カメラの起動に失敗しました: ${err.message}`);
-        throw err;
+
+        throw new Error(
+          "カメラの起動に失敗しました: " +
+          err.message
+        );
+
       }
+
     }
 
-    async function main() {
-      try {
-        await setupCamera();
-        await requestWakeLock();
-        statusDiv.textContent = '軽量モデルを読み込み中...';
-        
-        await tf.ready();
-        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        
-        statusDiv.textContent = '計測中...';
-        
-        renderLoop();
-        runDetection();
-      } catch (err) {
-        showError(`初期化エラー: ${err.message}`);
-        console.error(err);
-      }
+
+    /*
+     * ============================================================
+     * Bounding Box関連
+     * ============================================================
+     */
+
+    function getBoxCenter(box) {
+
+      const [
+        x,
+        y,
+        width,
+        height
+      ] = box;
+
+      return {
+
+        x: x + width / 2,
+
+        y: y + height / 2
+
+      };
+
     }
 
-    // AI検出処理
-    async function runDetection() {
-      if (video.readyState === 4 && model && !isDetecting) {
-        isDetecting = true;
-        try {
-          // 誤認識（ノイズ）を防ぐため信頼度を 0.35 に調整
-          const predictions = await model.detect(video, 6, 0.35);
-          
-          const lineX = canvas.width / 2;
-          const newDetections = [];
 
-          predictions.forEach(pred => {
-            if (pred.class === 'person') {
-              const [x, y, width, height] = pred.bbox;
-              const centerX = x + width / 2;
-              const centerY = y + height / 2;
-              newDetections.push({ x, y, width, height, centerX, centerY });
-            }
-          });
+    function calculateIoU(a, b) {
 
-          // 各追跡対象の更新フラグをリセットし、ロストカウントを加算
-          for (let [id, person] of trackedPersons.entries()) {
-            person.updatedInCurrentFrame = false;
-            person.lostCount = (person.lostCount || 0) + 1;
-          }
+      const ax1 = a.x;
+      const ay1 = a.y;
 
-          // 検出された人物のマッチング処理
-          newDetections.forEach(det => {
-            let matchedId = null;
-            let minDistance = 70;
+      const ax2 =
+        a.x + a.width;
 
-            for (let [id, person] of trackedPersons.entries()) {
-              if (person.updatedInCurrentFrame) continue;
+      const ay2 =
+        a.y + a.height;
 
-              const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
-              if (dist < minDistance) {
-                minDistance = dist;
-                matchedId = id;
-              }
-            }
 
-            const isCurrentLeft = det.centerX < lineX;
-            const isCurrentRight = det.centerX >= lineX;
-            let person = null;
+      const bx1 = b.x;
+      const by1 = b.y;
 
-            if (matchedId !== null) {
-              person = trackedPersons.get(matchedId);
-              person.x = det.x;
-              person.y = det.y;
-              person.width = det.width;
-              person.height = det.height;
-              person.centerX = det.centerX;
-              person.centerY = det.centerY;
-              person.lostCount = 0; // 見つかったのでリセット
-              person.updatedInCurrentFrame = true;
-            } else {
-              const currentId = nextPersonId++;
-              person = {
-                id: currentId,
-                x: det.x,
-                y: det.y,
-                width: det.width,
-                height: det.height,
-                centerX: det.centerX,
-                centerY: det.centerY,
-                lostCount: 0,
-                visitedLeft: isCurrentLeft,
-                visitedRight: isCurrentRight,
-                hasCounted: false,
-                updatedInCurrentFrame: true
-              };
-              trackedPersons.set(currentId, person);
-            }
+      const bx2 =
+        b.x + b.width;
 
-            if (isCurrentLeft) person.visitedLeft = true;
-            if (isCurrentRight) person.visitedRight = true;
+      const by2 =
+        b.y + b.height;
 
-            // カウント判定
-            if (!person.hasCounted) {
-              if (person.visitedLeft && isCurrentRight) {
-                countLR++;
-                document.getElementById('count-lr').textContent = countLR;
-                person.hasCounted = true;
-              } else if (person.visitedRight && isCurrentLeft) {
-                countRL++;
-                document.getElementById('count-rl').textContent = countRL;
-                person.hasCounted = true;
-              }
-            }
-          });
 
-          // 【重要な変更】画面から消えた枠を素早く除去（2回連続で見失ったら即削除）
-          for (let [id, person] of trackedPersons.entries()) {
-            if (person.lostCount >= 2) {
-              trackedPersons.delete(id);
-            }
-          }
+      const ix1 =
+        Math.max(ax1, bx1);
 
-        } catch (err) {
-          console.error(err);
-        } finally {
-          isDetecting = false;
+      const iy1 =
+        Math.max(ay1, by1);
+
+      const ix2 =
+        Math.min(ax2, bx2);
+
+      const iy2 =
+        Math.min(ay2, by2);
+
+
+      const iw =
+        Math.max(0, ix2 - ix1);
+
+      const ih =
+        Math.max(0, iy2 - iy1);
+
+
+      const intersection =
+        iw * ih;
+
+
+      if (intersection <= 0) {
+        return 0;
+      }
+
+
+      const areaA =
+        a.width * a.height;
+
+      const areaB =
+        b.width * b.height;
+
+
+      const union =
+        areaA +
+        areaB -
+        intersection;
+
+
+      if (union <= 0) {
+        return 0;
+      }
+
+
+      return intersection / union;
+
+    }
+
+
+    /*
+     * ============================================================
+     * 予測位置
+     * ============================================================
+     */
+
+    function predictPosition(person, now) {
+
+      if (!person.lastTime) {
+
+        return {
+
+          x: person.centerX,
+
+          y: person.centerY
+
+        };
+
+      }
+
+
+      const dt =
+        Math.min(
+          (now - person.lastTime) / 1000,
+          0.5
+        );
+
+
+      return {
+
+        x:
+          person.centerX +
+          person.velocityX * dt,
+
+        y:
+          person.centerY +
+          person.velocityY * dt
+
+      };
+
+    }
+
+
+    /*
+     * ============================================================
+     * 左右状態
+     * ============================================================
+     *
+     * 重要:
+     *
+     * 中央線のすぐ近くでは状態を変えない。
+     *
+     * これにより
+     *
+     * 159 → 161 → 159 → 161
+     *
+     * のような検出ブレによる誤カウントを防ぐ。
+     *
+     * ============================================================
+     */
+
+    function getStableSide(centerX) {
+
+      const lineX =
+        canvas.width / 2;
+
+      const margin =
+        CONFIG.LINE_MARGIN;
+
+
+      if (centerX < lineX - margin) {
+
+        return "left";
+
+      }
+
+
+      if (centerX > lineX + margin) {
+
+        return "right";
+
+      }
+
+
+      return "neutral";
+
+    }
+
+
+    /*
+     * ============================================================
+     * 人物マッチング
+     * ============================================================
+     *
+     * 単純な「現在位置との距離」だけではなく、
+     *
+     * 1. 予測位置との距離
+     * 2. Bounding BoxのIoU
+     * 3. 人物サイズ
+     *
+     * を考慮してマッチングする。
+     *
+     * ============================================================
+     */
+
+    function findBestMatch(
+      detection,
+      candidates,
+      now
+    ) {
+
+      let best = null;
+
+      let bestScore = Infinity;
+
+
+      for (const candidate of candidates) {
+
+        const person =
+          candidate.person;
+
+
+        /*
+         * すでに今回のフレームで
+         * 使用されたIDは除外
+         */
+        if (person.updatedInCurrentFrame) {
+          continue;
         }
+
+
+        const predicted =
+          predictPosition(person, now);
+
+
+        const dx =
+          detection.centerX -
+          predicted.x;
+
+        const dy =
+          detection.centerY -
+          predicted.y;
+
+
+        const distance =
+          Math.hypot(dx, dy);
+
+
+        /*
+         * あまりに離れている人物は
+         * 最初から候補から除外。
+         */
+        if (
+          distance >
+          CONFIG.MAX_MATCH_DISTANCE
+        ) {
+
+          continue;
+
+        }
+
+
+        /*
+         * IoU
+         */
+        const iou =
+          calculateIoU(
+            detection,
+            person
+          );
+
+
+        /*
+         * サイズ比
+         */
+        const personArea =
+          person.width *
+          person.height;
+
+        const detectionArea =
+          detection.width *
+          detection.height;
+
+
+        const areaRatio =
+          Math.min(
+            personArea,
+            detectionArea
+          ) /
+          Math.max(
+            personArea,
+            detectionArea
+          );
+
+
+        /*
+         * スコア
+         *
+         * 小さいほど同一人物らしい。
+         */
+        const distanceScore =
+          distance /
+          CONFIG.MAX_MATCH_DISTANCE;
+
+
+        const iouScore =
+          1 - iou;
+
+
+        const sizeScore =
+          1 - areaRatio;
+
+
+        const score =
+          distanceScore * 0.60 +
+          iouScore * 0.25 +
+          sizeScore * 0.15;
+
+
+        if (score < bestScore) {
+
+          bestScore = score;
+
+          best = candidate;
+
+        }
+
       }
-      
-      setTimeout(runDetection, 30);
+
+
+      return best;
+
     }
 
-    // 画面描画処理
-    function renderLoop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 中央の赤線
-      const lineX = canvas.width / 2;
-      ctx.strokeStyle = 'red';
+    /*
+     * ============================================================
+     * 検出結果から人物情報を作成
+     * ============================================================
+     */
+
+    function extractPersonDetections(
+      predictions
+    ) {
+
+      const detections = [];
+
+
+      for (const pred of predictions) {
+
+        if (pred.class !== "person") {
+          continue;
+        }
+
+
+        if (
+          pred.score <
+          CONFIG.SCORE_THRESHOLD
+        ) {
+          continue;
+        }
+
+
+        const [
+          x,
+          y,
+          width,
+          height
+        ] = pred.bbox;
+
+
+        const center =
+          getBoxCenter(pred.bbox);
+
+
+        detections.push({
+
+          x,
+          y,
+          width,
+          height,
+
+          centerX: center.x,
+
+          centerY: center.y,
+
+          score: pred.score
+
+        });
+
+      }
+
+
+      return detections;
+
+    }
+
+
+    /*
+     * ============================================================
+     * 新規トラック作成
+     * ============================================================
+     */
+
+    function createTrack(
+      detection,
+      now
+    ) {
+
+      const id =
+        nextPersonId++;
+
+
+      const initialSide =
+        getStableSide(
+          detection.centerX
+        );
+
+
+      const person = {
+
+        id,
+
+        x: detection.x,
+
+        y: detection.y,
+
+        width: detection.width,
+
+        height: detection.height,
+
+
+        centerX:
+          detection.centerX,
+
+        centerY:
+          detection.centerY,
+
+
+        /*
+         * 移動速度
+         */
+        velocityX: 0,
+
+        velocityY: 0,
+
+
+        /*
+         * 最後に検出された時刻
+         */
+        lastTime: now,
+
+
+        /*
+         * 最後に検出された時刻
+         */
+        lastSeen: now,
+
+
+        /*
+         * 見失った回数
+         */
+        missedFrames: 0,
+
+
+        /*
+         * 現在の安定した左右状態
+         */
+        stableSide:
+          initialSide === "neutral"
+            ? null
+            : initialSide,
+
+
+        /*
+         * 中央付近での状態
+         */
+        currentSide:
+          initialSide,
+
+
+        /*
+         * 新規検出確認回数
+         */
+        confirmationCount: 1,
+
+
+        /*
+         * 正式な追跡対象になったか
+         */
+        confirmed: false,
+
+
+        /*
+         * 一度カウントしたか
+         */
+        hasCounted: false,
+
+
+        /*
+         * 今回更新されたか
+         */
+        updatedInCurrentFrame: true
+
+      };
+
+
+      trackedPersons.set(
+        id,
+        person
+      );
+
+
+      return person;
+
+    }
+
+
+    /*
+     * ============================================================
+     * 既存トラック更新
+     * ============================================================
+     */
+
+    function updateTrack(
+      person,
+      detection,
+      now
+    ) {
+
+      const dt =
+        Math.max(
+          0.001,
+          (now - person.lastTime) / 1000
+        );
+
+
+      /*
+       * 現在の速度を計算
+       */
+      const rawVelocityX =
+        (
+          detection.centerX -
+          person.centerX
+        ) / dt;
+
+
+      const rawVelocityY =
+        (
+          detection.centerY -
+          person.centerY
+        ) / dt;
+
+
+      /*
+       * 急激な速度変化を少し抑える
+       */
+      person.velocityX =
+        person.velocityX * 0.45 +
+        rawVelocityX * 0.55;
+
+
+      person.velocityY =
+        person.velocityY * 0.45 +
+        rawVelocityY * 0.55;
+
+
+      /*
+       * 座標も平滑化
+       */
+      const smoothing =
+        CONFIG.POSITION_SMOOTHING;
+
+
+      person.x =
+        person.x * (1 - smoothing) +
+        detection.x * smoothing;
+
+
+      person.y =
+        person.y * (1 - smoothing) +
+        detection.y * smoothing;
+
+
+      person.width =
+        person.width * (1 - smoothing) +
+        detection.width * smoothing;
+
+
+      person.height =
+        person.height * (1 - smoothing) +
+        detection.height * smoothing;
+
+
+      person.centerX =
+        person.centerX * (1 - smoothing) +
+        detection.centerX * smoothing;
+
+
+      person.centerY =
+        person.centerY * (1 - smoothing) +
+        detection.centerY * smoothing;
+
+
+      person.lastTime =
+        now;
+
+
+      person.lastSeen =
+        now;
+
+
+      person.missedFrames = 0;
+
+
+      person.updatedInCurrentFrame =
+        true;
+
+
+      /*
+       * 確認回数
+       */
+      if (!person.confirmed) {
+
+        person.confirmationCount++;
+
+
+        if (
+          person.confirmationCount >=
+          CONFIG.MIN_CONFIRMATION
+        ) {
+
+          person.confirmed = true;
+
+        }
+
+      }
+
+    }
+
+
+    /*
+     * ============================================================
+     * カウント判定
+     * ============================================================
+     */
+
+    function updateCrossingState(
+      person
+    ) {
+
+      /*
+       * 未確認の人物はカウントしない
+       */
+      if (!person.confirmed) {
+        return;
+      }
+
+
+      const newSide =
+        getStableSide(
+          person.centerX
+        );
+
+
+      person.currentSide =
+        newSide;
+
+
+      /*
+       * 中央の中立領域なら何もしない
+       */
+      if (newSide === "neutral") {
+        return;
+      }
+
+
+      /*
+       * 初回の左右位置を記録
+       */
+      if (person.stableSide === null) {
+
+        person.stableSide =
+          newSide;
+
+        return;
+
+      }
+
+
+      /*
+       * 同じ側なら何もしない
+       */
+      if (
+        person.stableSide ===
+        newSide
+      ) {
+
+        return;
+
+      }
+
+
+      /*
+       * ここまで来たら
+       *
+       * LEFT → RIGHT
+       *
+       * または
+       *
+       * RIGHT → LEFT
+       *
+       * が発生。
+       */
+
+      if (
+        CONFIG.COUNT_ONLY_ONCE &&
+        person.hasCounted
+      ) {
+
+        /*
+         * 追跡自体は更新する。
+         * ただし2回目以降はカウントしない。
+         */
+        person.stableSide =
+          newSide;
+
+        return;
+
+      }
+
+
+      if (
+        person.stableSide === "left" &&
+        newSide === "right"
+      ) {
+
+        countLR++;
+
+        countLRDiv.textContent =
+          countLR;
+
+        person.hasCounted = true;
+
+      }
+
+
+      else if (
+        person.stableSide === "right" &&
+        newSide === "left"
+      ) {
+
+        countRL++;
+
+        countRLDiv.textContent =
+          countRL;
+
+        person.hasCounted = true;
+
+      }
+
+
+      /*
+       * 新しい側を記録
+       */
+      person.stableSide =
+        newSide;
+
+    }
+
+
+    /*
+     * ============================================================
+     * 追跡対象の更新
+     * ============================================================
+     */
+
+    function updateTracks(
+      detections,
+      now
+    ) {
+
+      /*
+       * 今回の更新フラグをリセット
+       */
+      for (
+        const person
+        of trackedPersons.values()
+      ) {
+
+        person.updatedInCurrentFrame =
+          false;
+
+        person.missedFrames++;
+
+      }
+
+
+      /*
+       * 候補リスト
+       */
+      const candidates =
+        Array.from(
+          trackedPersons.entries()
+        )
+        .map(([id, person]) => ({
+          id,
+          person
+        }));
+
+
+      /*
+       * 重要:
+       *
+       * 検出順にそのまま割り当てるのではなく、
+       * 「最も近い組み合わせ」から確定する。
+       *
+       * これにより複数人が近づいた場合の
+       * ID交換を多少抑える。
+       */
+
+      const pairs = [];
+
+
+      for (
+        let i = 0;
+        i < detections.length;
+        i++
+      ) {
+
+        const detection =
+          detections[i];
+
+
+        for (
+          const candidate
+          of candidates
+        ) {
+
+          const person =
+            candidate.person;
+
+
+          if (
+            person.updatedInCurrentFrame
+          ) {
+            continue;
+          }
+
+
+          const predicted =
+            predictPosition(
+              person,
+              now
+            );
+
+
+          const distance =
+            Math.hypot(
+              detection.centerX -
+                predicted.x,
+
+              detection.centerY -
+                predicted.y
+            );
+
+
+          if (
+            distance >
+            CONFIG.MAX_MATCH_DISTANCE
+          ) {
+            continue;
+          }
+
+
+          const iou =
+            calculateIoU(
+              detection,
+              person
+            );
+
+
+          const areaA =
+            person.width *
+            person.height;
+
+
+          const areaB =
+            detection.width *
+            detection.height;
+
+
+          const areaRatio =
+            Math.min(
+              areaA,
+              areaB
+            ) /
+            Math.max(
+              areaA,
+              areaB
+            );
+
+
+          const score =
+            (distance /
+              CONFIG.MAX_MATCH_DISTANCE) *
+              0.60 +
+
+            (1 - iou) * 0.25 +
+
+            (1 - areaRatio) * 0.15;
+
+
+          pairs.push({
+
+            detectionIndex: i,
+
+            personId:
+              candidate.id,
+
+            score
+
+          });
+
+        }
+
+      }
+
+
+      /*
+       * スコアの良い順に確定
+       */
+      pairs.sort(
+        (a, b) =>
+          a.score - b.score
+      );
+
+
+      const matchedDetections =
+        new Set();
+
+      const matchedPersons =
+        new Set();
+
+
+      for (
+        const pair of pairs
+      ) {
+
+        if (
+          matchedDetections.has(
+            pair.detectionIndex
+          )
+        ) {
+          continue;
+        }
+
+
+        if (
+          matchedPersons.has(
+            pair.personId
+          )
+        ) {
+          continue;
+        }
+
+
+        const detection =
+          detections[
+            pair.detectionIndex
+          ];
+
+
+        const person =
+          trackedPersons.get(
+            pair.personId
+          );
+
+
+        if (!person) {
+          continue;
+        }
+
+
+        updateTrack(
+          person,
+          detection,
+          now
+        );
+
+
+        updateCrossingState(
+          person
+        );
+
+
+        matchedDetections.add(
+          pair.detectionIndex
+        );
+
+
+        matchedPersons.add(
+          pair.personId
+        );
+
+      }
+
+
+      /*
+       * マッチしなかった検出は新規人物
+       */
+      for (
+        let i = 0;
+        i < detections.length;
+        i++
+      ) {
+
+        if (
+          matchedDetections.has(i)
+        ) {
+          continue;
+        }
+
+
+        const person =
+          createTrack(
+            detections[i],
+            now
+          );
+
+
+        /*
+         * 新規作成直後は
+         * まだカウントしない。
+         */
+        person.updatedInCurrentFrame =
+          true;
+
+      }
+
+
+      /*
+       * 見失った人物を整理
+       */
+      for (
+        const [
+          id,
+          person
+        ]
+        of trackedPersons.entries()
+      ) {
+
+        if (
+          person.updatedInCurrentFrame
+        ) {
+          continue;
+        }
+
+
+        /*
+         * 一時的な検出漏れ。
+         *
+         * すぐ削除しない。
+         */
+        if (
+          now - person.lastSeen >
+          CONFIG.TRACK_TIMEOUT
+        ) {
+
+          trackedPersons.delete(id);
+
+        }
+
+      }
+
+    }
+
+
+    /*
+     * ============================================================
+     * AI検出
+     * ============================================================
+     */
+
+    async function runDetection() {
+
+      if (
+        !video ||
+        video.readyState !== 4 ||
+        !model ||
+        isDetecting
+      ) {
+
+        setTimeout(
+          runDetection,
+          CONFIG.DETECTION_INTERVAL
+        );
+
+        return;
+
+      }
+
+
+      isDetecting = true;
+
+
+      const startTime =
+        performance.now();
+
+
+      try {
+
+        /*
+         * COCO-SSDによる人物検出
+         */
+        const predictions =
+          await model.detect(
+            video,
+            CONFIG.MAX_DETECTIONS,
+            CONFIG.SCORE_THRESHOLD
+          );
+
+
+        const detections =
+          extractPersonDetections(
+            predictions
+          );
+
+
+        const now =
+          performance.now();
+
+
+        /*
+         * 人物追跡更新
+         */
+        updateTracks(
+          detections,
+          now
+        );
+
+
+        /*
+         * UI
+         */
+        detectionCountDiv.textContent =
+          detections.length;
+
+
+        trackingCountDiv.textContent =
+          trackedPersons.size;
+
+
+      } catch (err) {
+
+        console.error(
+          "Detection error:",
+          err
+        );
+
+      } finally {
+
+        isDetecting = false;
+
+      }
+
+
+      /*
+       * 次の検出
+       */
+      setTimeout(
+        runDetection,
+        CONFIG.DETECTION_INTERVAL
+      );
+
+    }
+
+
+    /*
+     * ============================================================
+     * 描画
+     * ============================================================
+     */
+
+    function renderLoop() {
+
+      ctx.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+
+      const lineX =
+        canvas.width / 2;
+
+
+      const margin =
+        CONFIG.LINE_MARGIN;
+
+
+      /*
+       * --------------------------------------------------------
+       * 中央の中立領域
+       * --------------------------------------------------------
+       */
+
+      ctx.fillStyle =
+        "rgba(255, 255, 0, 0.08)";
+
+
+      ctx.fillRect(
+        lineX - margin,
+        0,
+        margin * 2,
+        canvas.height
+      );
+
+
+      /*
+       * --------------------------------------------------------
+       * 中央線
+       * --------------------------------------------------------
+       */
+
+      ctx.strokeStyle =
+        "red";
+
       ctx.lineWidth = 3;
+
       ctx.beginPath();
-      ctx.moveTo(lineX, 0);
-      ctx.lineTo(lineX, canvas.height);
+
+      ctx.moveTo(
+        lineX,
+        0
+      );
+
+      ctx.lineTo(
+        lineX,
+        canvas.height
+      );
+
       ctx.stroke();
 
-      // 追跡中の人物枠を描画（見失ったフレームではすぐ消去）
-      for (let [id, person] of trackedPersons.entries()) {
-        if (person.lostCount === 0) {
-          ctx.strokeStyle = person.hasCounted ? '#FFD700' : '#00FF00';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(person.x, person.y, person.width, person.height);
 
-          ctx.fillStyle = person.hasCounted ? '#FFD700' : '#00FF00';
-          ctx.font = 'bold 14px sans-serif';
-          let statusText = `ID:${person.id} `;
-          if (person.visitedLeft) statusText += '[L]';
-          if (person.visitedRight) statusText += '[R]';
-          if (person.hasCounted) statusText += ' OK!';
-          ctx.fillText(statusText, person.x, person.y > 20 ? person.y - 5 : person.y + 15);
+      /*
+       * 中立領域の境界
+       */
+      ctx.strokeStyle =
+        "rgba(255, 0, 0, 0.35)";
+
+      ctx.lineWidth = 1;
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        lineX - margin,
+        0
+      );
+
+      ctx.lineTo(
+        lineX - margin,
+        canvas.height
+      );
+
+      ctx.moveTo(
+        lineX + margin,
+        0
+      );
+
+      ctx.lineTo(
+        lineX + margin,
+        canvas.height
+      );
+
+      ctx.stroke();
+
+
+      /*
+       * --------------------------------------------------------
+       * 人物枠
+       * --------------------------------------------------------
+       */
+
+      for (
+        const person
+        of trackedPersons.values()
+      ) {
+
+        /*
+         * 長時間見失った人物は
+         * 描画しない。
+         */
+        if (
+          performance.now() -
+            person.lastSeen >
+          500
+        ) {
+          continue;
         }
+
+
+        /*
+         * 色
+         *
+         * 黄色:
+         *   カウント済み
+         *
+         * 緑:
+         *   正式追跡中
+         *
+         * オレンジ:
+         *   まだ確認中
+         */
+        if (person.hasCounted) {
+
+          ctx.strokeStyle =
+            "#FFD700";
+
+        }
+
+        else if (person.confirmed) {
+
+          ctx.strokeStyle =
+            "#00FF00";
+
+        }
+
+        else {
+
+          ctx.strokeStyle =
+            "#FFA500";
+
+        }
+
+
+        ctx.lineWidth = 2;
+
+
+        ctx.strokeRect(
+          person.x,
+          person.y,
+          person.width,
+          person.height
+        );
+
+
+        /*
+         * 中心点
+         */
+        ctx.fillStyle =
+          ctx.strokeStyle;
+
+        ctx.beginPath();
+
+        ctx.arc(
+          person.centerX,
+          person.centerY,
+          4,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.fill();
+
+
+        /*
+         * ----------------------------------------------------
+         * ID表示
+         * ----------------------------------------------------
+         */
+
+        ctx.font =
+          "bold 12px sans-serif";
+
+
+        let statusText =
+          "ID:" + person.id;
+
+
+        if (person.stableSide === "left") {
+
+          statusText += " [L]";
+
+        }
+
+        else if (
+          person.stableSide === "right"
+        ) {
+
+          statusText += " [R]";
+
+        }
+
+        else {
+
+          statusText += " [-]";
+
+        }
+
+
+        if (person.hasCounted) {
+
+          statusText +=
+            " COUNTED";
+
+        }
+
+        else if (!person.confirmed) {
+
+          statusText +=
+            " CHECK";
+
+        }
+
+
+        /*
+         * 背景
+         */
+        const textWidth =
+          ctx.measureText(
+            statusText
+          ).width;
+
+
+        ctx.fillStyle =
+          "rgba(0,0,0,0.65)";
+
+
+        ctx.fillRect(
+          person.x,
+          Math.max(
+            0,
+            person.y - 18
+          ),
+          textWidth + 6,
+          17
+        );
+
+
+        /*
+         * 文字
+         */
+        ctx.fillStyle =
+          "#ffffff";
+
+
+        ctx.fillText(
+          statusText,
+          person.x + 3,
+          Math.max(
+            12,
+            person.y - 5
+          )
+        );
+
       }
 
-      requestAnimationFrame(renderLoop);
+
+      /*
+       * FPS
+       */
+      fpsFrameCount++;
+
+
+      const now =
+        performance.now();
+
+
+      if (
+        now - fpsLastTime >= 1000
+      ) {
+
+        fpsDiv.textContent =
+          fpsFrameCount;
+
+
+        fpsFrameCount = 0;
+
+        fpsLastTime = now;
+
+      }
+
+
+      requestAnimationFrame(
+        renderLoop
+      );
+
     }
 
-    document.addEventListener('visibilitychange', async () => {
-      if (wakeLock !== null && document.visibilityState === 'visible') {
-        await requestWakeLock();
-      }
-    });
 
-    window.onload = main;
+    /*
+     * ============================================================
+     * カウンターリセット
+     * ============================================================
+     */
+
+    function resetCounters() {
+
+      countLR = 0;
+
+      countRL = 0;
+
+
+      countLRDiv.textContent =
+        "0";
+
+      countRLDiv.textContent =
+        "0";
+
+
+      /*
+       * 現在の人物追跡も一旦リセット。
+       *
+       * これをしないと、
+       * リセット直後に以前の人物が
+       * ラインを越えた場合、
+       * カウントされる可能性がある。
+       */
+      trackedPersons.clear();
+
+      nextPersonId = 1;
+
+    }
+
+
+    resetButton.addEventListener(
+      "click",
+      resetCounters
+    );
+
+
+    /*
+     * ============================================================
+     * visibility change
+     * ============================================================
+     */
+
+    document.addEventListener(
+      "visibilitychange",
+      async () => {
+
+        if (
+          document.visibilityState ===
+          "visible"
+        ) {
+
+          await requestWakeLock();
+
+        }
+
+      }
+    );
+
+
+    /*
+     * ============================================================
+     * メイン
+     * ============================================================
+     */
+
+    async function main() {
+
+      try {
+
+        statusDiv.textContent =
+          "カメラを起動しています...";
+
+
+        await setupCamera();
+
+
+        await requestWakeLock();
+
+
+        statusDiv.textContent =
+          "TensorFlow.jsを初期化中...";
+
+
+        await tf.ready();
+
+
+        statusDiv.textContent =
+          "人物検出モデルを読み込み中...";
+
+
+        /*
+         * 元コードと同じ軽量モデル
+         */
+        model =
+          await cocoSsd.load({
+            base: "lite_mobilenet_v2"
+          });
+
+
+        statusDiv.textContent =
+          "計測中";
+
+
+        /*
+         * 描画開始
+         */
+        renderLoop();
+
+
+        /*
+         * AI検出開始
+         */
+        runDetection();
+
+
+      } catch (err) {
+
+        console.error(err);
+
+        showError(
+          err.message ||
+          String(err)
+        );
+
+      }
+
+    }
+
+
+    /*
+     * ============================================================
+     * ページロード
+     * ============================================================
+     */
+
+    window.addEventListener(
+      "load",
+      main
+    );
+
   </script>
+
 </body>
 </html>
