@@ -112,7 +112,7 @@
     let countLR = 0;
     let countRL = 0;
     
-    // トラッキング用マップ (ID => { centerX, centerY, lostCount, hasCounted })
+    // トラッキング用マップ (ID => { centerX, centerY, lostCount, visitedLeft, visitedRight, hasCounted })
     let trackedPersons = new Map();
     let nextPersonId = 1;
 
@@ -162,93 +162,107 @@
       }
     }
 
-async function detectFrame() {
-  if (video.readyState === 4) {
-    // 確信度を 0.3 に下げて、移動中の人物を確実に捕捉
-    const predictions = await model.detect(video, 6, 0.3);
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    const lineX = canvas.width / 2;
-    ctx.strokeStyle = 'red';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(lineX, 0);
-    ctx.lineTo(lineX, canvas.height);
-    ctx.stroke();
-
-    const currentDetections = [];
-
-    predictions.forEach(pred => {
-      if (pred.class === 'person') {
-        const [x, y, width, height] = pred.bbox;
-        const centerX = x + width / 2;
-        const centerY = y + height / 2;
-
-        ctx.strokeStyle = '#00FF00';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x, y, width, height);
-
-        currentDetections.push({ centerX, centerY });
-      }
-    });
-
-    for (let [id, person] of trackedPersons.entries()) {
-      person.lostCount = (person.lostCount || 0) + 1;
-    }
-
-    currentDetections.forEach(det => {
-      let matchedId = null;
-      let minDistance = 180; // 追跡許容距離を少し広げる
-
-      for (let [id, person] of trackedPersons.entries()) {
-        const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
-        if (dist < minDistance) {
-          minDistance = dist;
-          matchedId = id;
-        }
-      }
-
-      if (matchedId !== null) {
-        const prevPerson = trackedPersons.get(matchedId);
+    async function detectFrame() {
+      if (video.readyState === 4) {
+        const predictions = await model.detect(video, 6, 0.3);
         
-        if (!prevPerson.hasCounted) {
-          // 単純な「ラインを通過したか（正負の符号が入れ替わったか）」の判定に変更
-          // 幅(px)の制限をなくし、高速移動での跨ぎ漏れを防止
-          if (prevPerson.centerX < lineX && det.centerX >= lineX) {
-            countLR++;
-            document.getElementById('count-lr').textContent = countLR;
-            prevPerson.hasCounted = true;
-          } else if (prevPerson.centerX > lineX && det.centerX <= lineX) {
-            countRL++;
-            document.getElementById('count-rl').textContent = countRL;
-            prevPerson.hasCounted = true;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 画面を左右に分ける境界線
+        const lineX = canvas.width / 2;
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(lineX, 0);
+        ctx.lineTo(lineX, canvas.height);
+        ctx.stroke();
+
+        const currentDetections = [];
+
+        predictions.forEach(pred => {
+          if (pred.class === 'person') {
+            const [x, y, width, height] = pred.bbox;
+            const centerX = x + width / 2;
+            const centerY = y + height / 2;
+
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, width, height);
+
+            currentDetections.push({ centerX, centerY });
+          }
+        });
+
+        for (let [id, person] of trackedPersons.entries()) {
+          person.lostCount = (person.lostCount || 0) + 1;
+        }
+
+        currentDetections.forEach(det => {
+          let matchedId = null;
+          let minDistance = 250; // 素早い移動（フレーム飛び）にも耐えられるよう追跡距離を拡張
+
+          for (let [id, person] of trackedPersons.entries()) {
+            const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
+            if (dist < minDistance) {
+              minDistance = dist;
+              matchedId = id;
+            }
+          }
+
+          // 現在の位置が「左エリア」か「右エリア」かを判定
+          const isCurrentLeft = det.centerX < lineX;
+          const isCurrentRight = det.centerX >= lineX;
+
+          if (matchedId !== null) {
+            const person = trackedPersons.get(matchedId);
+
+            // 滞在履歴を更新
+            if (isCurrentLeft) person.visitedLeft = true;
+            if (isCurrentRight) person.visitedRight = true;
+
+            // エリア進入判定によるカウント処理
+            if (!person.hasCounted) {
+              // 過去に左エリアにいた履歴があり、現在右エリアに入った場合
+              if (person.visitedLeft && isCurrentRight) {
+                countLR++;
+                document.getElementById('count-lr').textContent = countLR;
+                person.hasCounted = true;
+              } 
+              // 過去に右エリアにいた履歴があり、現在左エリアに入った場合
+              else if (person.visitedRight && isCurrentLeft) {
+                countRL++;
+                document.getElementById('count-rl').textContent = countRL;
+                person.hasCounted = true;
+              }
+            }
+
+            person.centerX = det.centerX;
+            person.centerY = det.centerY;
+            person.lostCount = 0;
+          } else {
+            // 新規認識時の登録処理（初期の滞在エリアを記録）
+            trackedPersons.set(nextPersonId++, {
+              centerX: det.centerX,
+              centerY: det.centerY,
+              lostCount: 0,
+              visitedLeft: isCurrentLeft,
+              visitedRight: isCurrentRight,
+              hasCounted: false
+            });
+          }
+        });
+
+        // 見失ってからの保持期間を10フレームに設定（一時的な遮蔽や見失いに対応）
+        for (let [id, person] of trackedPersons.entries()) {
+          if (person.lostCount > 10) {
+            trackedPersons.delete(id);
           }
         }
-
-        prevPerson.centerX = det.centerX;
-        prevPerson.centerY = det.centerY;
-        prevPerson.lostCount = 0;
-      } else {
-        trackedPersons.set(nextPersonId++, {
-          centerX: det.centerX,
-          centerY: det.centerY,
-          lostCount: 0,
-          hasCounted: false
-        });
       }
-    });
 
-    // ロスト保持を5フレーム（約0.15秒）に短縮し、次の人への切り替えをスムーズ化
-    for (let [id, person] of trackedPersons.entries()) {
-      if (person.lostCount > 5) {
-        trackedPersons.delete(id);
-      }
+      requestAnimationFrame(detectFrame);
     }
-  }
 
-  requestAnimationFrame(detectFrame);
-}
     window.onload = main;
   </script>
 </body>
