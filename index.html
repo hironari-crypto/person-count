@@ -92,7 +92,7 @@
   <div id="error-message"></div>
 
   <div class="video-container">
-    <video id="webcam" autoplay playsinline muted></video>
+    <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
     <canvas id="output"></canvas>
   </div>
 
@@ -111,6 +111,7 @@
     let model = null;
     let countLR = 0;
     let countRL = 0;
+    let wakeLock = null;
     
     let trackedPersons = new Map();
     let nextPersonId = 1;
@@ -119,6 +120,17 @@
       statusDiv.style.display = 'none';
       errorDiv.style.display = 'block';
       errorDiv.innerHTML = `<strong>エラーが発生しました:</strong><br>${msg}`;
+    }
+
+    // 画面スリープ防止処理（Wake Lock）
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {
+        console.log(`Wake Lock error: ${err.name}, ${err.message}`);
+      }
     }
 
     async function setupCamera() {
@@ -140,6 +152,7 @@
           video.onloadedmetadata = () => {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+            video.play();
             resolve(video);
           };
         });
@@ -152,6 +165,7 @@
     async function main() {
       try {
         await setupCamera();
+        await requestWakeLock();
         statusDiv.textContent = 'モデルを読み込み中...';
         model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
         statusDiv.textContent = '計測中...';
@@ -187,18 +201,15 @@
           }
         });
 
-        // ロストカウントの増加
         for (let [id, person] of trackedPersons.entries()) {
           person.lostCount = (person.lostCount || 0) + 1;
         }
 
         currentDetections.forEach(det => {
           let matchedId = null;
-          let minDistance = 50; // 320pxの画面幅に合わせて許容距離を50pxに小さく設定
+          let minDistance = 50;
 
-          // 近くにいる登録済みの人物を探す
           for (let [id, person] of trackedPersons.entries()) {
-            // 他の検出で既にマッチング済みのIDはスキップ
             if (person.updatedInCurrentFrame) continue;
 
             const dist = Math.hypot(det.centerX - person.centerX, det.centerY - person.centerY);
@@ -220,7 +231,6 @@
             person.lostCount = 0;
             person.updatedInCurrentFrame = true;
           } else {
-            // 近くに既存データがない場合は新規IDを発行
             currentId = nextPersonId++;
             person = {
               centerX: det.centerX,
@@ -234,11 +244,9 @@
             trackedPersons.set(currentId, person);
           }
 
-          // 移動エリアの記録
           if (isCurrentLeft) person.visitedLeft = true;
           if (isCurrentRight) person.visitedRight = true;
 
-          // カウント判定
           if (!person.hasCounted) {
             if (person.visitedLeft && isCurrentRight) {
               countLR++;
@@ -251,7 +259,6 @@
             }
           }
 
-          // 枠線と文字の描画
           ctx.strokeStyle = person.hasCounted ? '#FFD700' : '#00FF00';
           ctx.lineWidth = 2;
           ctx.strokeRect(det.x, det.y, det.width, det.height);
@@ -265,7 +272,6 @@
           ctx.fillText(statusText, det.x, det.y > 20 ? det.y - 5 : det.y + 15);
         });
 
-        // フレームごとの更新フラグをリセット＆ロストデータの削除（6フレーム経過で消去）
         for (let [id, person] of trackedPersons.entries()) {
           person.updatedInCurrentFrame = false;
           if (person.lostCount > 6) {
@@ -276,6 +282,13 @@
 
       requestAnimationFrame(detectFrame);
     }
+
+    // バックグラウンドから復帰した際に再度WakeLockを設定
+    document.addEventListener('visibilitychange', async () => {
+      if (wakeLock !== null && document.visibilityState === 'visible') {
+        await requestWakeLock();
+      }
+    });
 
     window.onload = main;
   </script>
